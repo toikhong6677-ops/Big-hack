@@ -1,0 +1,868 @@
+-- language: Luau, runtime: Delta X
+-- Meme Sea Menu: Misc + Quest + Farm + PvP + Stats
+
+pcall(function()
+    if game.CoreGui:FindFirstChild("Rayfield") then
+        game.CoreGui.Rayfield:Destroy()
+    end
+end)
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
+local LP = Players.LocalPlayer
+
+local Window = Rayfield:CreateWindow({
+    Name = "Meme Sea Menu",
+    LoadingTitle = "Meme Sea Menu",
+    LoadingSubtitle = "by cụ lao công",
+    ConfigurationSaving = { Enabled = false },
+    KeySystem = false
+})
+
+local MiscTab  = Window:CreateTab("Misc", 4483362458)
+local QuestTab = Window:CreateTab("Quest", 4483362458)
+local FarmTab  = Window:CreateTab("Farm", 4483362458)
+local PvPTab   = Window:CreateTab("PvP", 4483362458)
+local StatsTab = Window:CreateTab("Stats", 4483362458)
+
+local function log(m) print("[MemeSeaMenu] " .. m) end
+
+local _env = getgenv and getgenv() or _G
+
+-- =========================================================
+-- SHARED
+-- =========================================================
+
+local MonsterFolder = workspace:FindFirstChild("Monster") or workspace:WaitForChild("Monster", 10)
+local QuestFolder   = LP:FindFirstChild("QuestFolder")
+local PlayerData    = LP:FindFirstChild("PlayerData")
+local PlayerLevel   = PlayerData and PlayerData:FindFirstChild("Level")
+
+local FLY_SPEED = 300
+local FARM_DIST = 9
+local TOOL_FARM = "Fight"
+local AUTO_CLICK = true
+local AUTO_HAKI = true
+local BRING_MOBS = false
+
+local function isAlive(c)
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function getRoot(c)
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+-- ===== FLY ENGINE =====
+local flyTarget = nil
+local flyOnArrive = nil
+local flying = false
+
+local function flyTo(cf, onArrive, force)
+    if flying and not force then return end
+    flying = true
+    flyTarget = cf
+    flyOnArrive = onArrive
+end
+
+RunService.RenderStepped:Connect(function(dt)
+    if not flyTarget then return end
+    local char = LP.Character
+    local root = getRoot(char)
+    if not root or not isAlive(char) then
+        flyTarget = nil; flyOnArrive = nil; flying = false
+        return
+    end
+    local dist = (root.Position - flyTarget.Position).Magnitude
+    if dist <= 2 then
+        root.CFrame = flyTarget
+        root.AssemblyLinearVelocity = Vector3.zero
+        flyTarget = nil
+        flying = false
+        local cb = flyOnArrive
+        flyOnArrive = nil
+        if cb then task.spawn(cb) end
+        return
+    end
+    local alpha = math.min(1, (FLY_SPEED * dt) / dist)
+    root.CFrame = root.CFrame:Lerp(flyTarget, alpha)
+    root.AssemblyLinearVelocity = Vector3.zero
+end)
+
+local function tpTo(cf)
+    local char = LP.Character
+    local root = getRoot(char)
+    if not root or not isAlive(char) then return end
+    flyTarget = nil; flyOnArrive = nil; flying = false
+    root.CFrame = cf
+    root.AssemblyLinearVelocity = Vector3.zero
+end
+
+-- tìm tool theo từ khoá trong ToolTip hoặc Name
+local function equipFarmTool()
+    local char = LP.Character
+    local bp = LP:FindFirstChild("Backpack")
+    if not isAlive(char) then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+
+    -- nếu đang cầm tool khớp rồi thì bỏ qua
+    for _, t in ipairs(char:GetChildren()) do
+        if t:IsA("Tool") then
+            local tip = t.ToolTip or ""
+            local nm = t.Name or ""
+            if tip:find(TOOL_FARM) or nm:find(TOOL_FARM) then
+                return
+            end
+        end
+    end
+
+    if bp then
+        for _, t in ipairs(bp:GetChildren()) do
+            if t:IsA("Tool") then
+                local tip = t.ToolTip or ""
+                local nm = t.Name or ""
+                if tip:find(TOOL_FARM) or nm:find(TOOL_FARM) then
+                    hum:EquipTool(t)
+                    return
+                end
+            end
+        end
+    end
+end
+
+local function click()
+    if AUTO_CLICK then
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:Button1Down(Vector2.new(1e4, 1e4))
+        end)
+    end
+    if AUTO_HAKI then
+        local char = LP.Character
+        if char and char:FindFirstChild("AuraColor_Folder") then
+            if #char.AuraColor_Folder:GetChildren() < 1 then
+                pcall(function()
+                    local OtherEvent = ReplicatedStorage:FindFirstChild("OtherEvent")
+                    if OtherEvent and OtherEvent:FindFirstChild("MainEvents") then
+                        OtherEvent.MainEvents.Ability:InvokeServer("Aura")
+                    end
+                end)
+            end
+        end
+    end
+end
+
+local function bringMobsTo(targetCF, mobName)
+    if not BRING_MOBS or not MonsterFolder then return end
+    for _, m in ipairs(MonsterFolder:GetChildren()) do
+        if (not mobName or m.Name == mobName) and isAlive(m) then
+            local pp = m.PrimaryPart
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            if pp and hum and (pp.Position - targetCF.Position).Magnitude < 500 then
+                hum.WalkSpeed = 0
+                pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
+                pp.CFrame = targetCF
+                pp.CanCollide = false
+                pp.Transparency = 1
+                pp.Size = Vector3.new(50, 50, 50)
+            end
+        end
+    end
+    pcall(function()
+        local sp = sethiddenproperty or (getgenv and getgenv().sethiddenproperty)
+        if sp then sp(LP, "SimulationRadius", math.huge) end
+    end)
+end
+
+local function findNearestEnemy(name)
+    if not MonsterFolder then return nil end
+    local root = getRoot(LP.Character)
+    if not root then return nil end
+    local best, bestD = nil, math.huge
+    for _, m in ipairs(MonsterFolder:GetChildren()) do
+        if (not name or m.Name == name) and isAlive(m) and m.PrimaryPart then
+            local d = (m.PrimaryPart.Position - root.Position).Magnitude
+            if d < bestD then best, bestD = m, d end
+        end
+    end
+    return best
+end
+
+local function farmMob(mobName)
+    local m = findNearestEnemy(mobName)
+    if not m or not m.PrimaryPart then return false end
+    local root = getRoot(LP.Character)
+    if not root then return false end
+
+    local desired = m.PrimaryPart.CFrame * CFrame.new(0, FARM_DIST, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+    local d = (root.Position - desired.Position).Magnitude
+    if d > 3 then flyTo(desired) end
+
+    equipFarmTool()
+    click()
+    if BRING_MOBS then bringMobsTo(m.PrimaryPart.CFrame, mobName) end
+    return true
+end
+
+-- =========================================================
+-- MISC
+-- =========================================================
+
+local function getCodeList()
+    local ok, r = pcall(function()
+        return require(ReplicatedStorage:WaitForChild("ModuleScript", 9e9):WaitForChild("CodeList", 9e9))
+    end)
+    if not ok or type(r) ~= "table" then return nil end
+    return r
+end
+
+local function getCodeRemote()
+    local ok, r = pcall(function()
+        return ReplicatedStorage:WaitForChild("OtherEvent", 9e9)
+            :WaitForChild("MainEvents", 9e9)
+            :WaitForChild("Code", 9e9)
+    end)
+    if not ok then return nil end
+    return r
+end
+
+local function redeemCodes()
+    local codes = getCodeList()
+    if not codes then log("CodeList fail"); return end
+    local remote = getCodeRemote()
+    if not remote then log("Code remote fail"); return end
+    local list = {}
+    for name, d in pairs(codes) do
+        if type(d) == "table" and d.Status == true then table.insert(list, name) end
+    end
+    log(("%d code"):format(#list))
+    task.spawn(function()
+        for _, name in ipairs(list) do
+            local ok = pcall(function() return remote:InvokeServer(name) end)
+            log(("[%s] %s"):format(ok and "OK" or "FAIL", name))
+            task.wait(0.3)
+        end
+    end)
+end
+
+MiscTab:CreateButton({
+    Name = "Use All Code",
+    Info = "Redeem toàn bộ code Status=true",
+    Callback = function() task.spawn(redeemCodes) end
+})
+
+MiscTab:CreateSection("Chiến Đấu")
+
+MiscTab:CreateToggle({
+    Name = "Auto Click",
+    CurrentValue = true,
+    Flag = "AutoClick",
+    Callback = function(v) AUTO_CLICK = v end
+})
+
+MiscTab:CreateToggle({
+    Name = "Auto Haki",
+    CurrentValue = true,
+    Flag = "AutoHaki",
+    Callback = function(v) AUTO_HAKI = v end
+})
+
+MiscTab:CreateToggle({
+    Name = "Kéo Quái (Bring Mobs)",
+    Info = "Kéo quái trong bán kính 500 về chỗ đang đánh",
+    CurrentValue = false,
+    Flag = "BringMobs",
+    Callback = function(v) BRING_MOBS = v end
+})
+
+MiscTab:CreateSection("Di Chuyển")
+
+MiscTab:CreateSlider({
+    Name = "Tốc Độ Bay",
+    Range = { 100, 600 },
+    Increment = 10,
+    CurrentValue = FLY_SPEED,
+    Flag = "FlySpeed",
+    Callback = function(v) FLY_SPEED = v end
+})
+
+MiscTab:CreateSlider({
+    Name = "Khoảng Cách Farm",
+    Range = { 5, 20 },
+    Increment = 1,
+    CurrentValue = FARM_DIST,
+    Flag = "FarmDist",
+    Callback = function(v) FARM_DIST = v end
+})
+
+-- =========================================================
+-- QUEST
+-- =========================================================
+
+local QUEST_PROMPT_PATH = "Workspace.NPCs.Quests_Npc.Cool Floppa Quest.Block.QuestPrompt"
+local LAVA_PROMPT_PATH  = "Workspace.Island.FloppaIsland.Lava Floppa.ClickPart.ProximityPrompt"
+
+local lavaOn, lavaThread, lavaGen = false, nil, 0
+
+local function findByPath(path)
+    local cur = game
+    for n in path:gmatch("[^%.]+") do
+        cur = cur:FindFirstChild(n)
+        if not cur then return nil end
+    end
+    return cur
+end
+
+local function waitForPath(path, t)
+    t = t or 5
+    local t0 = tick()
+    while tick() - t0 < t do
+        local i = findByPath(path)
+        if i then return i end
+        task.wait(0.2)
+    end
+end
+
+local function firePrompt(p)
+    if not p or not p.Parent then return end
+    pcall(function()
+        p:InputHoldBegin()
+        if p.HoldDuration and p.HoldDuration > 0 then task.wait(p.HoldDuration + 0.02) end
+        p:InputHoldEnd()
+    end)
+end
+
+local function findQuestSlot()
+    local pg = LP:FindFirstChild("PlayerGui")
+    local qg = pg and pg:FindFirstChild("QuestGui")
+    local h = qg and qg:FindFirstChild("Holder")
+    if not h then return nil end
+    for _, s in ipairs(h:GetChildren()) do
+        if s.Name:match("^QuestSlot%d+$") then
+            local g = s:FindFirstChild("QuestGiver")
+            if g and g:IsA("TextLabel") and g.Text == "Cool Floppa Quest" then return s end
+        end
+    end
+end
+
+local function getFloppaProgress()
+    local pg = LP:FindFirstChild("PlayerGui")
+    local qg = pg and pg:FindFirstChild("QuestGui")
+    local h = qg and qg:FindFirstChild("Holder")
+    local qt = h and h:FindFirstChild("QuestText")
+    if qt and qt:IsA("TextLabel") then
+        return tonumber((qt.Text or ""):match("(%d+)/%d+"))
+    end
+end
+
+local function acceptFloppa(myGen)
+    if myGen ~= lavaGen then return false end
+    local p = waitForPath(QUEST_PROMPT_PATH, 5)
+    if not p or not p:IsA("ProximityPrompt") then return false end
+
+    for i = 1, 3 do
+        if not lavaOn or myGen ~= lavaGen then return false end
+        firePrompt(p)
+        task.wait(0.6)
+        if myGen ~= lavaGen then return false end
+        if findQuestSlot() then return true end
+        local still = findByPath(QUEST_PROMPT_PATH)
+        if not still or not still.Enabled then
+            task.wait(0.5)
+            if findQuestSlot() then return true end
+        end
+        task.wait(0.3)
+    end
+
+    local block = p.Parent
+    if block and block:IsA("BasePart") then
+        tpTo(CFrame.new(block.Position + Vector3.new(0, 3, 0)))
+        task.wait(0.5)
+        for i = 1, 5 do
+            if not lavaOn or myGen ~= lavaGen then return false end
+            local p2 = findByPath(QUEST_PROMPT_PATH)
+            if p2 and p2.Enabled then firePrompt(p2) end
+            task.wait(0.6)
+            if myGen ~= lavaGen then return false end
+            if findQuestSlot() then return true end
+        end
+    end
+    return false
+end
+
+local function spamLava(myGen)
+    local p = waitForPath(LAVA_PROMPT_PATH, 5)
+    if not p or not p:IsA("ProximityPrompt") then return end
+    local cp = p.Parent
+    if cp and cp:IsA("BasePart") then
+        tpTo(CFrame.new(cp.Position + Vector3.new(0, 3, 0)))
+        task.wait(0.4)
+    end
+    local hold = p.HoldDuration or 0
+    local ref = p
+    local fired = 0
+    local lastProgress = 0
+    local lastSeen = tick()
+
+    while lavaOn and myGen == lavaGen do
+        local cur = getFloppaProgress()
+        if cur then
+            lastProgress = cur
+            lastSeen = tick()
+            if cur >= 1000 then return end
+        else
+            local gone = tick() - lastSeen
+            if lastProgress >= 999 then
+                for _ = 1, 5 do
+                    if not lavaOn or myGen ~= lavaGen then return end
+                    local r = findByPath(LAVA_PROMPT_PATH)
+                    if r and r.Enabled then
+                        pcall(function()
+                            r:InputHoldBegin()
+                            if hold > 0 then task.wait(hold + 0.02) end
+                            r:InputHoldEnd()
+                        end)
+                        fired += 1
+                    end
+                    task.wait(0.15)
+                end
+                local c2 = getFloppaProgress()
+                if c2 and c2 >= 1000 then return end
+                if not c2 then return end
+            elseif gone > 3 then
+                return
+            end
+        end
+        if not ref.Parent or not ref.Enabled then
+            local r = findByPath(LAVA_PROMPT_PATH)
+            if r and r.Enabled then ref = r else task.wait(0.2); continue end
+        end
+        pcall(function()
+            ref:InputHoldBegin()
+            if hold > 0 then task.wait(hold + 0.02) end
+            ref:InputHoldEnd()
+        end)
+        fired += 1
+        if fired % 20 == 0 then task.wait() end
+    end
+end
+
+QuestTab:CreateToggle({
+    Name = "Auto Floppa Lava",
+    Info = "Accept quest + spam tới 1000/1000",
+    CurrentValue = false,
+    Flag = "AutoFloppaLava",
+    Callback = function(v)
+        lavaOn = v
+        if v then
+            lavaGen += 1
+            local myGen = lavaGen
+            if lavaThread then pcall(task.cancel, lavaThread) end
+            lavaThread = task.spawn(function()
+                if not acceptFloppa(myGen) then
+                    if myGen == lavaGen then lavaOn = false end
+                    return
+                end
+                if myGen ~= lavaGen then return end
+                task.wait(0.5)
+                spamLava(myGen)
+            end)
+        else
+            lavaGen += 1
+            if lavaThread then pcall(task.cancel, lavaThread); lavaThread = nil end
+        end
+    end
+})
+
+-- =========================================================
+-- FARM
+-- =========================================================
+
+local MQuestSettings = require(ReplicatedStorage.ModuleScript:WaitForChild("Quest_Settings"))
+local MSetting = require(ReplicatedStorage.ModuleScript:WaitForChild("Setting"))
+local OtherEvent = ReplicatedStorage:WaitForChild("OtherEvent")
+local NPCs = workspace:WaitForChild("NPCs")
+local Quests_Npc = NPCs:WaitForChild("Quests_Npc")
+local Location = workspace:WaitForChild("Location")
+local QuestLocation = Location:WaitForChild("QuestLocaion")
+local EnemyLocation = Location:WaitForChild("Enemy_Location")
+
+local LoadedQuests = {}
+for npc, q in pairs(MQuestSettings) do
+    if QuestLocation:FindFirstChild(npc) then
+        table.insert(LoadedQuests, {
+            NpcName = npc,
+            Enemy = q.Target,
+            Level = q.LevelNeed,
+            EnemyPos = EnemyLocation[q.Target] and EnemyLocation[q.Target].CFrame,
+            RaidBoss = q.Raid_Boss,
+            SpecialQuest = q.Special_Quest,
+        })
+    end
+end
+table.sort(LoadedQuests, function(a, b) return a.Level > b.Level end)
+
+local function getCurrentQuest()
+    if not PlayerLevel then return nil end
+    for _, q in ipairs(LoadedQuests) do
+        if q.Level <= PlayerLevel.Value and not q.RaidBoss and not q.SpecialQuest then
+            return q
+        end
+    end
+end
+
+local function checkQuest()
+    if not QuestFolder then return nil end
+    for _, v in ipairs(QuestFolder:GetChildren()) do
+        local t = v:FindFirstChild("Target")
+        if t and t.Value ~= "None" then return v end
+    end
+end
+
+local function takeQuest(npcName)
+    local npc = Quests_Npc:FindFirstChild(npcName)
+    if not npc then return end
+    local block = npc:FindFirstChild("Block")
+    local prompt = block and block:FindFirstChild("QuestPrompt")
+    if not prompt then return end
+
+    local root = getRoot(LP.Character)
+    if not root then return end
+    local npcPos = npc:GetPivot().Position
+    local dist = (npcPos - root.Position).Magnitude
+
+    if dist < 6 then
+        firePrompt(prompt)
+        return
+    end
+
+    local loc = QuestLocation:FindFirstChild(npcName)
+    local targetCF = loc and loc.CFrame or CFrame.new(npcPos + Vector3.new(0, 3, 0))
+    flyTo(targetCF + Vector3.new(0, 3, 0), function()
+        task.wait(0.15)
+        local block2 = npc:FindFirstChild("Block")
+        local p2 = block2 and block2:FindFirstChild("QuestPrompt")
+        if p2 and p2.Enabled then firePrompt(p2) end
+    end)
+end
+
+local function clearQuests(ignore)
+    if not QuestFolder then return end
+    for _, v in ipairs(QuestFolder:GetChildren()) do
+        local qg = v:FindFirstChild("QuestGiver")
+        local tg = v:FindFirstChild("Target")
+        if qg and tg and qg.Value ~= ignore and tg.Value ~= "None" then
+            pcall(function()
+                OtherEvent.QuestEvents.Quest:FireServer("Abandon_Quest", { QuestSlot = v.Name })
+            end)
+        end
+    end
+end
+
+local autoLevelOn = false
+local autoNearestOn = false
+local autoListOn = false
+local selectedEnemies = {}
+local farmThread
+
+local function farmLoop()
+    while autoLevelOn or autoNearestOn or autoListOn do
+        pcall(function()
+            if autoLevelOn then
+                local q = getCurrentQuest()
+                local cq = checkQuest()
+                if q then
+                    if cq then
+                        local npcName = cq.QuestGiver.Value
+                        local enemyName = cq.Target.Value
+                        if npcName == q.NpcName then
+                            if not farmMob(q.Enemy) and q.EnemyPos then
+                                flyTo(q.EnemyPos + Vector3.new(0, 8, 0))
+                            end
+                        else
+                            if not farmMob(enemyName) then
+                                local loc = QuestLocation:FindFirstChild(npcName)
+                                if loc then flyTo(loc.CFrame + Vector3.new(0, 5, 0)) end
+                            end
+                        end
+                    else
+                        takeQuest(q.NpcName)
+                    end
+                end
+            elseif autoListOn and #selectedEnemies > 0 then
+                for _, enemy in ipairs(selectedEnemies) do
+                    if not autoListOn then break end
+                    if not farmMob(enemy) then
+                        local loc = EnemyLocation:FindFirstChild(enemy)
+                        if loc then flyTo(loc.CFrame + Vector3.new(0, 8, 0)) end
+                    end
+                    task.wait()
+                end
+            elseif autoNearestOn then
+                if not farmMob(nil) then task.wait(0.2) end
+            end
+        end)
+        task.wait()
+    end
+    farmThread = nil
+end
+
+local function startFarm()
+    if farmThread then return end
+    farmThread = task.spawn(farmLoop)
+end
+
+-- ====== FARM TAB ======
+
+FarmTab:CreateSection("Vũ Khí")
+
+FarmTab:CreateDropdown({
+    Name = "Vũ Khí Farm",
+    Info = "Chọn loại vũ khí dùng để đánh",
+    Options = { "Fight", "Power", "Weapon" },
+    CurrentOption = { "Fight" },
+    Flag = "FarmTool",
+    Callback = function(o) TOOL_FARM = o[1] end
+})
+
+FarmTab:CreateButton({
+    Name = "Equip Ngay",
+    Info = "Trang bị vũ khí đã chọn",
+    Callback = function()
+        equipFarmTool()
+        Rayfield:Notify({ Title = "Equip", Content = "Đang dùng: " .. TOOL_FARM, Duration = 2 })
+    end
+})
+
+FarmTab:CreateSection("Auto Farm")
+
+FarmTab:CreateToggle({
+    Name = "Auto Farm Level",
+    Info = "Nhận quest + đánh quái theo level",
+    CurrentValue = false,
+    Flag = "AutoLevel",
+    Callback = function(v) autoLevelOn = v; if v then startFarm() end end
+})
+
+FarmTab:CreateToggle({
+    Name = "Auto Farm Quái Gần Nhất",
+    CurrentValue = false,
+    Flag = "AutoNearest",
+    Callback = function(v) autoNearestOn = v; if v then startFarm() end end
+})
+
+FarmTab:CreateSection("Farm Theo List Quái")
+
+local enemyList, enemySet = {}, {}
+local function scanEnemies()
+    table.clear(enemyList)
+    table.clear(enemySet)
+    if MonsterFolder then
+        for _, m in ipairs(MonsterFolder:GetChildren()) do
+            if not enemySet[m.Name] then
+                enemySet[m.Name] = true
+                table.insert(enemyList, m.Name)
+            end
+        end
+    end
+    table.sort(enemyList)
+end
+scanEnemies()
+
+if MonsterFolder then
+    MonsterFolder.ChildAdded:Connect(function(c)
+        if not enemySet[c.Name] then
+            enemySet[c.Name] = true
+            table.insert(enemyList, c.Name)
+            table.sort(enemyList)
+        end
+    end)
+end
+
+FarmTab:CreateDropdown({
+    Name = "Chọn Quái (multi)",
+    Options = enemyList,
+    CurrentOption = {},
+    MultipleOptions = true,
+    Flag = "EnemyList",
+    Callback = function(opts) selectedEnemies = opts end
+})
+
+FarmTab:CreateButton({
+    Name = "Refresh Danh Sách Quái",
+    Callback = function()
+        scanEnemies()
+        Rayfield:Notify({ Title = "Refresh", Content = ("%d quái"):format(#enemyList), Duration = 3 })
+    end
+})
+
+FarmTab:CreateToggle({
+    Name = "Auto Farm Theo List",
+    Info = "Đánh theo danh sách đã chọn",
+    CurrentValue = false,
+    Flag = "AutoList",
+    Callback = function(v) autoListOn = v; if v then startFarm() end end
+})
+
+-- =========================================================
+-- PvP
+-- =========================================================
+
+local pvpOn = false
+local pvpTarget = ""
+local pvpThread = nil
+local pvpThreadOn = false
+
+local function playerList()
+    local t = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP then table.insert(t, p.Name) end
+    end
+    return t
+end
+
+local function startPvPLoop()
+    if pvpThreadOn then return end
+    pvpThreadOn = true
+    pvpThread = task.spawn(function()
+        while pvpOn do
+            pcall(function()
+                local t = pvpTarget ~= "" and Players:FindFirstChild(pvpTarget) or nil
+                if t and t.Character and isAlive(t.Character) then
+                    local root = getRoot(t.Character)
+                    if root then
+                        local desired = root.CFrame * CFrame.new(0, FARM_DIST, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+                        local myRoot = getRoot(LP.Character)
+                        if myRoot and (myRoot.Position - desired.Position).Magnitude > 3 then
+                            flyTo(desired)
+                        end
+                        equipFarmTool()
+                        click()
+                    end
+                end
+            end)
+            task.wait()
+        end
+        pvpThreadOn = false
+        pvpThread = nil
+    end)
+end
+
+PvPTab:CreateDropdown({
+    Name = "Chọn Người Chơi",
+    Options = playerList(),
+    CurrentOption = {},
+    Flag = "PvPTarget",
+    Callback = function(o) pvpTarget = o[1] or "" end
+})
+
+PvPTab:CreateToggle({
+    Name = "Auto PvP",
+    Info = "Bay tới + đánh người chơi đã chọn",
+    CurrentValue = false,
+    Flag = "AutoPvP",
+    Callback = function(v)
+        pvpOn = v
+        if v then startPvPLoop() end
+    end
+})
+
+PvPTab:CreateButton({
+    Name = "TP Tới Người Chơi",
+    Callback = function()
+        local t = Players:FindFirstChild(pvpTarget)
+        if t and t.Character then
+            local root = getRoot(t.Character)
+            if root then
+                tpTo(root.CFrame * CFrame.new(0, FARM_DIST, 0) * CFrame.Angles(math.rad(-90), 0, 0))
+            end
+        end
+    end
+})
+
+-- =========================================================
+-- STATS
+-- =========================================================
+
+local StatsMap = {
+    ["Power"]   = "MemePowerLevel",
+    ["Defense"] = "DefenseLevel",
+    ["Sword"]   = "SwordLevel",
+    ["Melee"]   = "MeleeLevel",
+}
+
+local autoStatsOn = false
+local statsPointsPer = 1
+local selectedStats = {}
+
+local function doAutoStats()
+    task.spawn(function()
+        while autoStatsOn do
+            local SP = PlayerData and PlayerData:FindFirstChild("SkillPoint")
+            for statName in pairs(selectedStats) do
+                if not autoStatsOn then break end
+                local target = StatsMap[statName]
+                if target and SP and SP.Value > 0 then
+                    local lvl = PlayerData:FindFirstChild(target)
+                    if lvl then
+                        local maxLevel = MSetting.Setting and MSetting.Setting.MaxLevel or 9999
+                        if lvl.Value < maxLevel then
+                            local amount = math.clamp(statsPointsPer, 1, maxLevel - lvl.Value)
+                            pcall(function()
+                                OtherEvent.MainEvents.StatsFunction:InvokeServer({
+                                    Target = target,
+                                    Action = "UpgradeStats",
+                                    Amount = amount
+                                })
+                            end)
+                        end
+                    end
+                end
+            end
+            task.wait(0.5)
+        end
+    end)
+end
+
+StatsTab:CreateDropdown({
+    Name = "Chọn Chỉ Số (multi)",
+    Options = { "Power", "Defense", "Sword", "Melee" },
+    CurrentOption = {},
+    MultipleOptions = true,
+    Flag = "StatsPick",
+    Callback = function(opts)
+        table.clear(selectedStats)
+        for _, name in ipairs(opts) do selectedStats[name] = true end
+    end
+})
+
+StatsTab:CreateSlider({
+    Name = "Điểm Nâng Mỗi Lần",
+    Range = { 1, 100 },
+    Increment = 1,
+    CurrentValue = 1,
+    Flag = "StatsPer",
+    Callback = function(v) statsPointsPer = v end
+})
+
+StatsTab:CreateToggle({
+    Name = "Auto Nâng Chỉ Số",
+    CurrentValue = false,
+    Flag = "AutoStats",
+    Callback = function(v)
+        autoStatsOn = v
+        if v then doAutoStats() end
+    end
+})
+
+Rayfield:Notify({
+    Title = "Meme Sea Menu",
+    Content = "Load xong.",
+    Duration = 4
+})
